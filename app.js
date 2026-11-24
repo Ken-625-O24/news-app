@@ -17,8 +17,18 @@
     { key: 'now', title: 'なぜ今、問題になっている？' }
   ];
 
+  var FILTERS = [
+    { key: 'all', name: 'すべて' },
+    { key: 'economy', name: '経済' },
+    { key: 'stock', name: '株価' }
+  ];
+  var PAGE_DAYS = 7; // 最初に読み込む日数
+
   var app = document.getElementById('app');
   var articles = [];
+  var allDates = [];
+  var loadedCount = 0;
+  var homeFilter = sessionStorage.getItem('filter') || 'all';
   var whyState = {}; // 記事ごとの「なぜ？」の会話履歴
 
   /* ---------- 小さな道具 ---------- */
@@ -180,29 +190,81 @@
       h('h1', { class: 'hero-title' }, 'ニュースを、', h('br'), 'あなたの生活の話に。'),
       h('p', { class: 'hero-sub', text: '1本60秒。何が起きて、あなたにどう関係するのか。' })
     ));
+    // 絞り込みタブ
+    root.appendChild(h('div', { class: 'filter-tabs' }, FILTERS.map(function (f) {
+      return h('button', {
+        type: 'button', class: f.key === homeFilter ? 'on' : '', text: f.name,
+        onclick: function () { homeFilter = f.key; sessionStorage.setItem('filter', f.key); route(); }
+      });
+    })));
+
+    var list = articles.filter(function (a) {
+      return homeFilter === 'all' || (homeFilter === 'stock') === isStock(a);
+    });
+    if (!list.length) root.appendChild(h('p', { class: 'empty', text: 'この分類のニュースはまだありません。' }));
+
     var lastDate = null, n = 0;
-    articles.forEach(function (a, i) {
+    list.forEach(function (a, i) {
       if (a.date !== lastDate) {
         lastDate = a.date;
         n = 0;
-        root.appendChild(h('div', { class: 'date-head', text: i === 0 ? 'TODAY — ' + formatDate(a.date) : formatDate(a.date) }));
+        root.appendChild(h('div', { class: 'date-head', text: a.date === articles[0].date ? 'LATEST — ' + formatDate(a.date) : formatDate(a.date) }));
       }
       n++;
       root.appendChild(h('a', { class: 'news-card' + (i === 0 ? ' featured' : ''), href: '#/a/' + encodeURIComponent(a.id) },
         h('div', { class: 'card-top' },
           h('span', { class: 'idx', text: pad(n) }),
           h('span', { class: 'cat', text: a.category || '経済' }),
+          stockChange(a.stock),
           h('span', { class: 'read', text: '⏱ 60秒' })),
         h('h2', { text: a.title }),
         h('p', { text: a.lead || '' }),
         h('span', { class: 'card-arrow', text: '→' })
       ));
     });
+
+    if (loadedCount < allDates.length) {
+      var more = h('button', {
+        class: 'btn btn-sub', type: 'button', style: 'margin-top:20px', text: 'もっと前のニュースを見る',
+        onclick: function () {
+          more.textContent = '読み込み中…';
+          loadMore().then(route);
+        }
+      });
+      root.appendChild(more);
+    }
     root.appendChild(h('p', {
       class: 'note',
       text: 'このアプリの解説はAIが作成しています。誤りが含まれる可能性があるため、大事な判断の前には各記事の出典を確認してください。投資や借入の判断はご自身の責任で行ってください。'
     }));
     return root;
+  }
+
+  function isStock(a) { return a.kind === 'stock' || !!a.stock; }
+
+  function stockDir(st) {
+    if (st.direction) return st.direction;
+    return /^[-−▼]/.test(String(st.change || '')) ? 'down' : 'up';
+  }
+
+  /* カード用：▲5.2% のような小さな表示 */
+  function stockChange(st) {
+    if (!st || !st.change) return null;
+    var dir = stockDir(st);
+    return h('span', { class: 'chg ' + dir, text: (dir === 'down' ? '▼' : '▲') + String(st.change).replace(/^[+＋\-−▲▼]/, '') });
+  }
+
+  /* 記事用：企業名・終値・前日比のパネル */
+  function stockPanel(st) {
+    if (!st) return null;
+    var dir = stockDir(st);
+    return h('div', { class: 'stock-panel' },
+      h('div', null,
+        h('div', { class: 'stock-name', text: st.company || '' }),
+        h('div', { class: 'stock-sub', text: [st.ticker, st.market, st.asOf].filter(Boolean).join(' ・ ') })),
+      h('div', { class: 'stock-nums' },
+        st.close ? h('div', { class: 'stock-close', text: st.close }) : null,
+        st.change ? h('div', { class: 'stock-chg ' + dir, text: (dir === 'down' ? '▼ ' : '▲ ') + String(st.change).replace(/^[+＋\-−▲▼]/, '') }) : null));
   }
 
   function step(no, title, type, body) {
@@ -248,8 +310,9 @@
         h('div', { class: 'meta' },
           h('span', { text: formatDate(a.date) }),
           h('span', { class: 'pill', text: '⏱ 60秒でわかる' }))),
+      stockPanel(a.stock),
       step(1, '何が起きた？', 'fact', paragraphs(s.what, g)),
-      step(2, 'なぜ起きた？', 'fact', paragraphs(s.why, g)),
+      step(2, isStock(a) ? 'なぜ株価が動いた？' : 'なぜ起きた？', 'fact', paragraphs(s.why, g)),
       step(3, '誰が得をする？ 損をする？', 'view', who),
       step(4, 'あなたにどう関係する？', 'view', youBody),
       step(5, '今後どうなる？', 'forecast', paragraphs(s.next, g)),
@@ -413,6 +476,10 @@
     } else if (parts[0] === 'a' && parts[1]) {
       var id = decodeURIComponent(parts[1]);
       var a = articles.filter(function (x) { return x.id === id; })[0];
+      if (!a) {
+        var p = ensureArticleDate(id);
+        if (p) { p.then(route); return; }
+      }
       if (!a) view = h('div', null, topbar(), h('p', { class: 'empty', text: '記事が見つかりませんでした。' }));
       else if (parts[2] === 'story') view = viewStory(a);
       else if (parts[2] === 'why') view = viewWhy(a);
@@ -434,18 +501,41 @@
     bar.style.width = (max > 0 ? Math.min(100, window.scrollY / max * 100) : 0) + '%';
   }
 
-  function init() {
-    window.NEWS_ARTICLES = [];
-    loadScript('data/manifest.js?v=' + Date.now()).then(function () {
-      var dates = (window.NEWS_MANIFEST || []).slice();
-      return Promise.all(dates.map(function (d) {
-        return loadScript('data/articles/' + d + '.js?v=' + Date.now()).catch(function () {});
-      }));
-    }).then(function () {
+  var loadedDates = {};
+
+  function loadDates(dates) {
+    var stamp = Date.now();
+    return Promise.all(dates.filter(function (d) { return !loadedDates[d]; }).map(function (d) {
+      loadedDates[d] = true;
+      return loadScript('data/articles/' + d + '.js?v=' + stamp).catch(function () {});
+    })).then(function () {
       articles = window.NEWS_ARTICLES.slice().sort(function (a, b) {
         if (a.date !== b.date) return a.date < b.date ? 1 : -1;
         return (a.order || 0) - (b.order || 0);
       });
+    });
+  }
+
+  /* 「もっと前を見る」：次の7日分を読み込む */
+  function loadMore() {
+    var next = allDates.slice(loadedCount, loadedCount + PAGE_DAYS);
+    loadedCount += next.length;
+    return loadDates(next);
+  }
+
+  /* 直接開いた古い記事（まだ読み込んでいない日）を読み込む */
+  function ensureArticleDate(id) {
+    var d = String(id).slice(0, 10);
+    if (allDates.indexOf(d) === -1 || loadedDates[d]) return null;
+    return loadDates([d]);
+  }
+
+  function init() {
+    window.NEWS_ARTICLES = [];
+    loadScript('data/manifest.js?v=' + Date.now()).then(function () {
+      allDates = (window.NEWS_MANIFEST || []).slice().sort().reverse();
+      return loadMore();
+    }).then(function () {
       window.addEventListener('hashchange', route);
       window.addEventListener('scroll', updateProgress, { passive: true });
       route();
