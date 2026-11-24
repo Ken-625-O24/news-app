@@ -1,0 +1,13 @@
+{
+  "name": "60s NEWS ― ニュースを、あなたの生活の話に。",
+  "short_name": "60s NEWS",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f5f1",
+  "theme_color": "#111111",
+  "lang": "ja",
+  "icons": [
+    { "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
